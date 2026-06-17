@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: abyssfm-postgres
+    environment:
+      POSTGRES_USER: abyssfm_user
+      POSTGRES_PASSWORD: abyssfm_password
+      POSTGRES_DB: abyssfm_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - abyssfm_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  abyssfm_postgres_data:

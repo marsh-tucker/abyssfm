@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+
+# Environment files
+.env
+.env.local
+appsettings.Development.json
+
+# Node / React
+node_modules/
+dist/
+build/
+.vite/
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
+
+# Docker database volume data should not be committed
+*.db
