@@ -10,7 +10,7 @@ The database design supports the following goals:
 
 * Store structured song metadata.
 * Avoid duplicated artist, genre, mood, and vibe data.
-* Support many-to-many relationships between songs and tags.
+* Support many-to-many relationships between songs and weighted classifications.
 * Support a custom recommendation algorithm.
 * Store recommendation sessions and results for future analysis.
 * Map clearly to C# entity models in the backend.
@@ -39,6 +39,7 @@ Examples:
 artists
 albums
 songs
+song_genres
 mood_tags
 song_mood_tags
 recommendation_sessions
@@ -52,6 +53,7 @@ Examples:
 Artist
 Album
 Song
+SongGenre
 MoodTag
 SongMoodTag
 RecommendationSession
@@ -70,6 +72,7 @@ artists
 albums
 genres
 songs
+song_genres
 mood_tags
 vibe_tags
 song_mood_tags
@@ -77,6 +80,12 @@ song_vibe_tags
 recommendation_sessions
 recommendation_results
 ```
+
+The `songs` table stores the central song record.
+
+The `genres`, `mood_tags`, and `vibe_tags` tables store reusable classification options.
+
+The `song_genres`, `song_mood_tags`, and `song_vibe_tags` tables connect songs to those classifications with weights from 1 to 10.
 
 ---
 
@@ -87,11 +96,13 @@ The core relationships are:
 * One artist can have many albums.
 * One artist can have many songs.
 * One album can have many songs.
-* One genre can apply to many songs.
+* One genre can be the primary genre for many songs.
+* One song can have many weighted genres.
+* One genre can apply to many songs through `song_genres`.
 * One song can have many mood tags.
-* One mood tag can apply to many songs.
+* One mood tag can apply to many songs through `song_mood_tags`.
 * One song can have many vibe tags.
-* One vibe tag can apply to many songs.
+* One vibe tag can apply to many songs through `song_vibe_tags`.
 * One recommendation session can have many recommendation results.
 * One song can appear in many recommendation results.
 
@@ -101,14 +112,26 @@ Simplified relationship map:
 artists 1 ─── many albums
 artists 1 ─── many songs
 albums 1 ─── many songs
-genres 1 ─── many songs
 
-songs many ─── many mood_tags
-songs many ─── many vibe_tags
+genres 1 ─── many songs as primary genre
+songs many ─── many genres through song_genres
+
+songs many ─── many mood_tags through song_mood_tags
+songs many ─── many vibe_tags through song_vibe_tags
 
 recommendation_sessions 1 ─── many recommendation_results
 songs 1 ─── many recommendation_results
 ```
+
+In plain English:
+
+* `genres` stores the master list of genre options.
+* `songs.primary_genre_id` stores the main genre displayed for a song.
+* `song_genres` stores all weighted genres that apply to a song.
+* `song_mood_tags` stores all weighted moods that apply to a song.
+* `song_vibe_tags` stores all weighted vibes that apply to a song.
+
+This lets the app display a simple primary genre while still supporting richer similarity scoring through weighted genre relationships.
 
 ---
 
@@ -202,6 +225,8 @@ artist_id references artists.artist_id
 
 The `genres` table stores unique music genres so that genre names are not duplicated across songs.
 
+Genres are reusable. A genre can be used as a song's primary display genre and can also appear inside `song_genres` as a weighted genre match.
+
 ### Columns
 
 | Column       | Type         | Required | Description                                |
@@ -224,15 +249,17 @@ genre_id
 
 ### Example Data
 
-| name      | slug      |
-| --------- | --------- |
-| Darkwave  | darkwave  |
-| Dream Pop | dream-pop |
-| R&B       | r-and-b   |
-| Hip-Hop   | hip-hop   |
-| Ambient   | ambient   |
-| Shoegaze  | shoegaze  |
-| Synthwave | synthwave |
+| name         | slug         |
+| ------------ | ------------ |
+| Darkwave     | darkwave     |
+| Dream Pop    | dream-pop    |
+| R&B          | r-and-b      |
+| Hip-Hop      | hip-hop      |
+| Ambient      | ambient      |
+| Shoegaze     | shoegaze     |
+| Synthpop     | synthpop     |
+| Alternative  | alternative  |
+| Experimental | experimental |
 
 ---
 
@@ -242,30 +269,32 @@ genre_id
 
 The `songs` table stores the main song records used by the recommendation system.
 
-Each song stores basic display metadata and numeric attributes used by the recommendation algorithm.
+Each song stores basic display metadata, one primary display genre, and numeric attributes used by the recommendation algorithm.
+
+Genres used for similarity scoring are stored separately in the `song_genres` join table.
 
 ### Columns
 
-| Column              | Type         | Required | Description                                  |
-| ------------------- | ------------ | -------: | -------------------------------------------- |
-| `song_id`           | integer      |      Yes | Primary key                                  |
-| `title`             | varchar(200) |      Yes | Song title                                   |
-| `primary_artist_id` | integer      |      Yes | Foreign key to `artists`                     |
-| `album_id`          | integer      |       No | Optional foreign key to `albums`             |
-| `genre_id`          | integer      |      Yes | Foreign key to `genres`                      |
-| `duration_seconds`  | integer      |       No | Song duration in seconds                     |
-| `tempo_bpm`         | integer      |       No | Tempo in beats per minute                    |
-| `energy`            | smallint     |      Yes | Intensity level from 1 to 10                 |
-| `darkness`          | smallint     |      Yes | Darkness or mystery level from 1 to 10       |
-| `danceability`      | smallint     |      Yes | Danceability level from 1 to 10              |
-| `valence`           | smallint     |      Yes | Emotional brightness level from 1 to 10      |
-| `instrumentalness`  | smallint     |      Yes | Instrumentalness level from 1 to 10          |
-| `description`       | text         |       No | Optional short song description              |
-| `preview_url`       | text         |       No | Optional preview or audio URL for future use |
-| `external_url`      | text         |       No | Optional external song link                  |
-| `cover_theme`       | varchar(100) |       No | Visual theme for generated or mock cover art |
-| `created_at`        | timestamptz  |      Yes | Record creation timestamp                    |
-| `updated_at`        | timestamptz  |       No | Last update timestamp                        |
+| Column              | Type         | Required | Description                                              |
+| ------------------- | ------------ | -------: | -------------------------------------------------------- |
+| `song_id`           | integer      |      Yes | Primary key                                              |
+| `title`             | varchar(200) |      Yes | Song title                                               |
+| `primary_artist_id` | integer      |      Yes | Foreign key to `artists`                                 |
+| `album_id`          | integer      |       No | Optional foreign key to `albums`                         |
+| `primary_genre_id`  | integer      |      Yes | Foreign key to `genres`; main display genre for the song |
+| `duration_seconds`  | integer      |       No | Song duration in seconds                                 |
+| `tempo_bpm`         | integer      |       No | Tempo in beats per minute                                |
+| `energy`            | smallint     |      Yes | Intensity level from 1 to 10                             |
+| `darkness`          | smallint     |      Yes | Darkness or mystery level from 1 to 10                   |
+| `danceability`      | smallint     |      Yes | Danceability level from 1 to 10                          |
+| `valence`           | smallint     |      Yes | Emotional brightness level from 1 to 10                  |
+| `instrumentalness`  | smallint     |      Yes | Instrumentalness level from 1 to 10                      |
+| `description`       | text         |       No | Optional short song description                          |
+| `preview_url`       | text         |       No | Optional preview or audio URL for future use             |
+| `external_url`      | text         |       No | Optional external song link                              |
+| `cover_theme`       | varchar(100) |       No | Visual theme for generated or mock cover art             |
+| `created_at`        | timestamptz  |      Yes | Record creation timestamp                                |
+| `updated_at`        | timestamptz  |       No | Last update timestamp                                    |
 
 ### Primary Key
 
@@ -278,7 +307,7 @@ song_id
 ```text
 primary_artist_id references artists.artist_id
 album_id references albums.album_id
-genre_id references genres.genre_id
+primary_genre_id references genres.genre_id
 ```
 
 ### Constraints
@@ -339,17 +368,85 @@ Describes how much the song feels instrumental instead of vocal-driven.
 
 ### Example Data
 
-| title      | artist       | genre    | energy | darkness | danceability | valence | instrumentalness |
-| ---------- | ------------ | -------- | -----: | -------: | -----------: | ------: | ---------------: |
-| Prism      | Pastel Ghost | Darkwave |      6 |        8 |            6 |       3 |                4 |
-| Dark Beach | Pastel Ghost | Darkwave |      7 |        9 |            7 |       2 |                5 |
-| Nights     | Frank Ocean  | R&B      |      5 |        6 |            5 |       4 |                3 |
+| title      | artist       | primary_genre | energy | darkness | danceability | valence | instrumentalness |
+| ---------- | ------------ | ------------- | -----: | -------: | -----------: | ------: | ---------------: |
+| Prism      | Pastel Ghost | Darkwave      |      6 |        8 |            6 |       3 |                4 |
+| Dark Beach | Pastel Ghost | Darkwave      |      7 |        9 |            7 |       2 |                5 |
+| Nights     | Frank Ocean  | R&B           |      5 |        6 |            5 |       4 |                3 |
+
+---
+
+## 10. Table: `song_genres`
+
+### Purpose
+
+The `song_genres` table connects songs to all genres that apply to them.
+
+A song can have many genres, and a genre can apply to many songs.
+
+This table supports weighted genre similarity for the recommendation algorithm.
+
+The `songs.primary_genre_id` column stores the main display genre, while `song_genres` stores all genres used for scoring.
+
+Example:
+
+```text
+Song: Nights
+
+Primary genre:
+R&B
+
+Weighted genres:
+R&B, weight 10
+Alternative, weight 7
+Experimental, weight 5
+```
+
+### Columns
+
+| Column     | Type     | Required | Description                                            |
+| ---------- | -------- | -------: | ------------------------------------------------------ |
+| `song_id`  | integer  |      Yes | Foreign key to `songs`                                 |
+| `genre_id` | integer  |      Yes | Foreign key to `genres`                                |
+| `weight`   | smallint |      Yes | Strength of the genre match for this song from 1 to 10 |
+
+### Primary Key
+
+Composite primary key:
+
+```text
+song_id + genre_id
+```
+
+### Foreign Keys
+
+```text
+song_id references songs.song_id
+genre_id references genres.genre_id
+```
+
+### Constraints
+
+* `weight` must be between 1 and 10.
+* Each song should have at least one `song_genres` record.
+* The primary genre should also appear in `song_genres` with a high weight, usually 10.
+
+### Example Data
+
+| song       | genre        | weight |
+| ---------- | ------------ | -----: |
+| Nights     | R&B          |     10 |
+| Nights     | Alternative  |      7 |
+| Nights     | Experimental |      5 |
+| Dark Beach | Darkwave     |     10 |
+| Dark Beach | Synthpop     |      7 |
+| Dark Beach | Dream Pop    |      4 |
 
 ---
 
 # Tag Tables
 
-## 10. Table: `mood_tags`
+## 11. Table: `mood_tags`
 
 ### Purpose
 
@@ -405,13 +502,15 @@ mood_tag_id
 
 ---
 
-## 11. Table: `vibe_tags`
+## 12. Table: `vibe_tags`
 
 ### Purpose
 
 The `vibe_tags` table stores contextual or atmospheric tags used to describe where or when a song fits.
 
 Vibe tags describe listening context or atmosphere.
+
+Vibes are optional during recommendation search. They act as a refinement layer, not a required matching category.
 
 ### Example Vibe Tags
 
@@ -463,7 +562,7 @@ vibe_tag_id
 
 # Join Tables
 
-## 12. Table: `song_mood_tags`
+## 13. Table: `song_mood_tags`
 
 ### Purpose
 
@@ -499,6 +598,7 @@ mood_tag_id references mood_tags.mood_tag_id
 ### Constraints
 
 * `weight` must be between 1 and 10.
+* Each song should have at least one `song_mood_tags` record.
 
 ### Example Data
 
@@ -510,7 +610,7 @@ mood_tag_id references mood_tags.mood_tag_id
 
 ---
 
-## 13. Table: `song_vibe_tags`
+## 14. Table: `song_vibe_tags`
 
 ### Purpose
 
@@ -546,6 +646,7 @@ vibe_tag_id references vibe_tags.vibe_tag_id
 ### Constraints
 
 * `weight` must be between 1 and 10.
+* Each song should have at least one `song_vibe_tags` record.
 
 ### Example Data
 
@@ -559,7 +660,7 @@ vibe_tag_id references vibe_tags.vibe_tag_id
 
 # Recommendation Tables
 
-## 14. Table: `recommendation_sessions`
+## 15. Table: `recommendation_sessions`
 
 ### Purpose
 
@@ -571,18 +672,19 @@ There will be no user accounts in the MVP, so a recommendation session represent
 
 ### Columns
 
-| Column                      | Type        | Required | Description                                             |
-| --------------------------- | ----------- | -------: | ------------------------------------------------------- |
-| `recommendation_session_id` | uuid        |      Yes | Primary key                                             |
-| `selected_mood_tags_json`   | text        |       No | JSON string of selected mood tags                       |
-| `selected_vibe_tags_json`   | text        |       No | JSON string of selected vibe tags                       |
-| `selected_genre_ids_json`   | text        |       No | JSON string of selected genre IDs                       |
-| `target_energy`             | smallint    |       No | User-selected target energy                             |
-| `target_darkness`           | smallint    |       No | User-selected target darkness                           |
-| `target_danceability`       | smallint    |       No | User-selected target danceability                       |
-| `target_valence`            | smallint    |       No | User-selected target valence                            |
-| `source`                    | varchar(50) |      Yes | Source of request, such as `mvp`, `frontend`, or `test` |
-| `created_at`                | timestamptz |      Yes | Session creation timestamp                              |
+| Column                       | Type        | Required | Description                                             |
+| ---------------------------- | ----------- | -------: | ------------------------------------------------------- |
+| `recommendation_session_id`  | uuid        |      Yes | Primary key                                             |
+| `selected_mood_tag_ids_json` | text        |       No | JSON string of selected mood tag IDs                    |
+| `selected_genre_ids_json`    | text        |       No | JSON string of selected genre IDs                       |
+| `selected_vibe_tag_ids_json` | text        |       No | JSON string of selected vibe tag IDs                    |
+| `target_energy`              | smallint    |       No | User-selected target energy                             |
+| `target_darkness`            | smallint    |       No | User-selected target darkness                           |
+| `target_danceability`        | smallint    |       No | User-selected target danceability                       |
+| `target_valence`             | smallint    |       No | User-selected target valence                            |
+| `target_instrumentalness`    | smallint    |       No | User-selected target instrumentalness                   |
+| `source`                     | varchar(50) |      Yes | Source of request, such as `mvp`, `frontend`, or `test` |
+| `created_at`                 | timestamptz |      Yes | Session creation timestamp                              |
 
 ### Primary Key
 
@@ -596,21 +698,34 @@ recommendation_session_id
 * `target_darkness` must be null or between 1 and 10.
 * `target_danceability` must be null or between 1 and 10.
 * `target_valence` must be null or between 1 and 10.
+* `target_instrumentalness` must be null or between 1 and 10.
+
+### Request Rules
+
+* The user must select at least one mood.
+* The user must select at least one genre.
+* Vibe selection is optional.
+* Numeric profile is optional.
+* If one numeric target is provided, all numeric targets must be provided.
 
 ### Example Data
 
 ```text
 recommendation_session_id: generated UUID
-selected mood tags: ethereal, late-night
-selected vibe tags: abyss, night-drive
+selected mood tag IDs: 1, 4
+selected genre IDs: 1, 7
+selected vibe tag IDs: 1, 2
 target energy: 6
 target darkness: 8
+target danceability: 5
+target valence: 3
+target instrumentalness: 4
 source: frontend
 ```
 
 ---
 
-## 15. Table: `recommendation_results`
+## 16. Table: `recommendation_results`
 
 ### Purpose
 
@@ -620,15 +735,15 @@ Each recommendation result belongs to one session and one song.
 
 ### Columns
 
-| Column                      | Type        | Required | Description                                |
-| --------------------------- | ----------- | -------: | ------------------------------------------ |
-| `recommendation_result_id`  | integer     |      Yes | Primary key                                |
-| `recommendation_session_id` | uuid        |      Yes | Foreign key to `recommendation_sessions`   |
-| `song_id`                   | integer     |      Yes | Foreign key to `songs`                     |
-| `rank`                      | integer     |      Yes | Result order, starting at 1                |
-| `score`                     | integer     |      Yes | Final recommendation score                 |
-| `reasons_json`              | text        |      Yes | JSON string containing explanation reasons |
-| `created_at`                | timestamptz |      Yes | Result creation timestamp                  |
+| Column                      | Type             | Required | Description                                |
+| --------------------------- | ---------------- | -------: | ------------------------------------------ |
+| `recommendation_result_id`  | integer          |      Yes | Primary key                                |
+| `recommendation_session_id` | uuid             |      Yes | Foreign key to `recommendation_sessions`   |
+| `song_id`                   | integer          |      Yes | Foreign key to `songs`                     |
+| `rank`                      | integer          |      Yes | Result order, starting at 1                |
+| `score`                     | double precision |      Yes | Final recommendation score                 |
+| `reasons_json`              | text             |      Yes | JSON string containing explanation reasons |
+| `created_at`                | timestamptz      |      Yes | Result creation timestamp                  |
 
 ### Primary Key
 
@@ -653,15 +768,15 @@ song_id references songs.song_id
 ### Example Result
 
 ```text
-Rank 1: Dark Beach, score 91
-Reasons: matches ethereal mood, matches abyss vibe, similar darkness level, same genre
+Rank 1: Dark Beach, score 83.25
+Reasons: matches ethereal mood, matches abyss vibe, strong darkwave genre match, similar darkness level
 ```
 
 ---
 
 # Indexes and Delete Behavior
 
-## 16. Recommended Indexes
+## 17. Recommended Indexes
 
 Indexes improve lookup performance and make the schema more realistic.
 
@@ -684,11 +799,17 @@ Indexes improve lookup performance and make the schema more realistic.
 
 * Index on `primary_artist_id`.
 * Index on `album_id`.
-* Index on `genre_id`.
+* Index on `primary_genre_id`.
 * Index on `energy`.
 * Index on `darkness`.
 * Index on `danceability`.
 * Index on `valence`.
+* Index on `instrumentalness`.
+
+### `song_genres`
+
+* Composite primary key on `song_id` and `genre_id`.
+* Index on `genre_id`.
 
 ### `mood_tags`
 
@@ -719,7 +840,7 @@ Indexes improve lookup performance and make the schema more realistic.
 
 ---
 
-## 17. Delete Behavior
+## 18. Delete Behavior
 
 ### Artists
 
@@ -743,12 +864,12 @@ Set album_id to null on songs.
 
 ### Genres
 
-Genres should not be deleted if songs still reference them.
+Genres should not be deleted if songs still reference them as a primary genre or through `song_genres`.
 
 Recommended behavior:
 
 ```text
-Restrict delete if songs exist.
+Restrict delete if songs or song_genres records exist.
 ```
 
 ### Songs
@@ -758,6 +879,7 @@ If a song is deleted, related join table records should also be deleted.
 Recommended behavior:
 
 ```text
+Cascade delete song_genres.
 Cascade delete song_mood_tags.
 Cascade delete song_vibe_tags.
 Cascade delete recommendation_results.
@@ -787,7 +909,7 @@ Cascade delete recommendation_results.
 
 # Design Decisions
 
-## 18. Normalization Decisions
+## 19. Normalization Decisions
 
 ### Artists are separated
 
@@ -806,6 +928,28 @@ PastelGhost
 Instead of storing raw genre strings in songs, songs reference the `genres` table.
 
 This keeps genre names consistent.
+
+The `songs` table stores a `primary_genre_id` for the main display genre.
+
+The `song_genres` table stores all weighted genres that apply to a song.
+
+This allows a song to have one clear display genre while still supporting hybrid genre similarity.
+
+Example:
+
+```text
+Song: Dark Beach
+
+Primary genre:
+Darkwave
+
+Weighted genres:
+Darkwave, weight 10
+Synthpop, weight 7
+Dream Pop, weight 4
+```
+
+This is better than storing only one `genre_id`, because music often blends several genres.
 
 ### Mood tags and vibe tags are separated
 
@@ -832,7 +976,7 @@ For the MVP, the app can still work even if recommendation history is not displa
 
 # Seed Data
 
-## 19. Seed Data Strategy
+## 20. Seed Data Strategy
 
 The MVP will use local seed data.
 
@@ -849,17 +993,19 @@ The seed process should:
 1. Read each song from the JSON file.
 2. Create the artist if it does not already exist.
 3. Create the album if provided and if it does not already exist.
-4. Create the genre if it does not already exist.
-5. Create mood tags if they do not already exist.
-6. Create vibe tags if they do not already exist.
-7. Create the song.
-8. Create `song_mood_tags` records.
-9. Create `song_vibe_tags` records.
-10. Avoid duplicate artists, albums, genres, tags, and songs.
+4. Create the primary genre if it does not already exist.
+5. Create all weighted genres if they do not already exist.
+6. Create mood tags if they do not already exist.
+7. Create vibe tags if they do not already exist.
+8. Create the song.
+9. Create `song_genres` records.
+10. Create `song_mood_tags` records.
+11. Create `song_vibe_tags` records.
+12. Avoid duplicate artists, albums, genres, tags, and songs.
 
 ---
 
-## 20. Seed Data Shape
+## 21. Seed Data Shape
 
 Each seed data object should include:
 
@@ -867,7 +1013,8 @@ Each seed data object should include:
 * `artist`
 * `album`
 * `releaseYear`
-* `genre`
+* `primaryGenre`
+* `genres`
 * `durationSeconds`
 * `tempoBpm`
 * `energy`
@@ -888,7 +1035,21 @@ Each seed data object should include:
   "artist": "Pastel Ghost",
   "album": "Abyss",
   "releaseYear": 2015,
-  "genre": "Darkwave",
+  "primaryGenre": "Darkwave",
+  "genres": [
+    {
+      "name": "Darkwave",
+      "weight": 10
+    },
+    {
+      "name": "Synthpop",
+      "weight": 7
+    },
+    {
+      "name": "Dream Pop",
+      "weight": 4
+    }
+  ],
   "durationSeconds": 209,
   "tempoBpm": 120,
   "energy": 6,
@@ -925,7 +1086,7 @@ Each seed data object should include:
 
 # Recommendation Flow and API Mapping
 
-## 21. Recommendation Data Flow
+## 22. Recommendation Data Flow
 
 The recommendation flow will work like this:
 
@@ -951,7 +1112,7 @@ React frontend displays recommendations
 
 ---
 
-## 22. Recommendation Query Requirements
+## 23. Recommendation Query Requirements
 
 The backend recommendation service must load songs with related metadata.
 
@@ -959,7 +1120,8 @@ Required related data:
 
 * Primary artist
 * Album
-* Genre
+* Primary genre
+* Weighted genres
 * Mood tags
 * Vibe tags
 
@@ -967,9 +1129,25 @@ The recommendation algorithm should not depend on frontend-only data.
 
 The frontend sends user preferences. The backend is responsible for calculating results.
 
+The backend should compare selected IDs against weighted song relationships.
+
+Example:
+
+```text
+User selected genre IDs:
+1, 2
+
+Song weighted genres:
+genre_id 1, weight 10
+genre_id 2, weight 7
+genre_id 4, weight 4
+```
+
+The backend should score the selected genre matches using the stored weights.
+
 ---
 
-## 23. API DTO Mapping
+## 24. API DTO Mapping
 
 The backend should not return raw Entity Framework Core entity models directly to the frontend.
 
@@ -981,7 +1159,7 @@ Instead, the backend should use DTOs.
 * `title`
 * `artist`
 * `album`
-* `genre`
+* `primaryGenre`
 * `durationSeconds`
 * `tempoBpm`
 * `energy`
@@ -991,19 +1169,28 @@ Instead, the backend should use DTOs.
 * `instrumentalness`
 * `description`
 * `coverTheme`
+* `genres`
 * `moodTags`
 * `vibeTags`
 
 ### Recommendation Request DTO Recommended Fields
 
-* `moodTags`
-* `vibeTags`
-* `genreIds`
+* `selectedMoodTagIds`
+* `selectedGenreIds`
+* `selectedVibeTagIds`
 * `targetEnergy`
 * `targetDarkness`
 * `targetDanceability`
 * `targetValence`
-* `favoriteSongIds`
+* `targetInstrumentalness`
+
+Request rules:
+
+* The user must select at least one mood.
+* The user must select at least one genre.
+* Vibe selection is optional.
+* Numeric profile is optional.
+* If one numeric target is provided, all numeric targets must be provided.
 
 ### Recommendation Result DTO Recommended Fields
 
@@ -1012,8 +1199,9 @@ Instead, the backend should use DTOs.
 * `title`
 * `artist`
 * `album`
-* `genre`
+* `primaryGenre`
 * `score`
+* `genres`
 * `moodTags`
 * `vibeTags`
 * `reasons`
@@ -1022,7 +1210,7 @@ Instead, the backend should use DTOs.
 
 # C# Backend Mapping
 
-## 24. C# Entity Model Mapping
+## 25. C# Entity Model Mapping
 
 The following C# entities should be created in the backend:
 
@@ -1031,6 +1219,7 @@ Artist
 Album
 Genre
 Song
+SongGenre
 MoodTag
 VibeTag
 SongMoodTag
@@ -1044,7 +1233,10 @@ The following relationships should be configured in `AbyssFmDbContext`:
 * `Artist` has many `Albums`.
 * `Artist` has many `Songs`.
 * `Album` has many `Songs`.
-* `Genre` has many `Songs`.
+* `Genre` has many primary genre `Songs`.
+* `Song` has one primary `Genre`.
+* `Song` has many `SongGenres`.
+* `Genre` has many `SongGenres`.
 * `Song` has many `SongMoodTags`.
 * `MoodTag` has many `SongMoodTags`.
 * `Song` has many `SongVibeTags`.
@@ -1054,12 +1246,13 @@ The following relationships should be configured in `AbyssFmDbContext`:
 
 The join tables should use composite keys:
 
+* `SongGenre` uses `SongId` and `GenreId`.
 * `SongMoodTag` uses `SongId` and `MoodTagId`.
 * `SongVibeTag` uses `SongId` and `VibeTagId`.
 
 ---
 
-## 25. Validation Requirements
+## 26. Validation Requirements
 
 The backend should validate database-bound values before saving.
 
@@ -1067,12 +1260,13 @@ The backend should validate database-bound values before saving.
 
 * Title
 * Primary artist
-* Genre
+* Primary genre
 * Energy
 * Darkness
 * Danceability
 * Valence
 * Instrumentalness
+* At least one weighted genre
 * At least one mood tag
 * At least one vibe tag
 
@@ -1083,14 +1277,27 @@ The backend should validate database-bound values before saving.
 * `danceability`
 * `valence`
 * `instrumentalness`
+* `song genre weight`
 * `song mood tag weight`
 * `song vibe tag weight`
 * `target energy`
 * `target darkness`
 * `target danceability`
 * `target valence`
+* `target instrumentalness`
 
-### Text validation rules:
+### Recommendation request validation
+
+The recommendation request must follow these rules:
+
+* The user must select at least one mood.
+* The user must select at least one genre.
+* Vibe selection is optional.
+* Numeric profile is optional.
+* If one numeric target is provided, all numeric targets must be provided.
+* Numeric target values must be between 1 and 10.
+
+### Text validation rules
 
 * Names should be trimmed before saving.
 * Tag names should be lowercase.
@@ -1108,7 +1315,7 @@ R&B -> r-and-b
 
 # MVP Scope and Future Enhancements
 
-## 26. MVP Database Scope
+## 27. MVP Database Scope
 
 The MVP database includes anonymous song recommendation data only.
 
@@ -1129,7 +1336,7 @@ These can be added later if needed.
 
 ---
 
-## 27. Future Database Enhancements
+## 28. Future Database Enhancements
 
 Future versions may add:
 
@@ -1186,7 +1393,7 @@ Potential columns:
 
 # Success Criteria
 
-## 28. Database Success Criteria
+## 29. Database Success Criteria
 
 The database design is successful when:
 
@@ -1202,7 +1409,7 @@ The database design is successful when:
 
 ---
 
-## 29. Final MVP Schema Summary
+## 30. Final MVP Schema Summary
 
 Final MVP tables:
 
@@ -1211,6 +1418,7 @@ artists
 albums
 genres
 songs
+song_genres
 mood_tags
 vibe_tags
 song_mood_tags
@@ -1222,9 +1430,23 @@ recommendation_results
 Core idea:
 
 * Songs are the central table.
-* Artists, albums, and genres describe the song.
-* Mood tags and vibe tags classify the song.
+* Artists and albums describe the song.
+* `primary_genre_id` gives each song one main display genre.
+* `song_genres` gives each song multiple weighted genres for similarity scoring.
+* Mood tags and vibe tags classify the emotional and contextual feel of the song.
 * Recommendation sessions store user requests.
 * Recommendation results store ranked song matches.
 
 This design is normalized enough to show real database understanding while still being manageable for the first version of AbyssFM.
+
+The recommendation system works because each song becomes a structured feature profile:
+
+```text
+metadata
+numeric attributes
+weighted genres
+weighted mood tags
+weighted vibe tags
+```
+
+The backend can compare that song profile against the user's selected mood, genre, optional vibe, and optional numeric profile to calculate a ranked recommendation score.
