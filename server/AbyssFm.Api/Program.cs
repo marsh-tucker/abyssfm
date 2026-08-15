@@ -15,6 +15,19 @@ builder.Services.AddDbContext<AbyssFmDbContext>(options =>
 
 builder.Services.AddScoped<IRecommendationService, RecommendationService>();
 
+const string FrontendCors = "FrontendCors";
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(FrontendCors, policy =>
+    {
+        policy
+            .WithOrigins("http://localhost:5173")
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
+
 builder.Services.AddScoped<DatabaseSeeder>();
 
 builder.Services.AddOpenApi();
@@ -36,6 +49,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.UseCors(FrontendCors);
 
 app.UseAuthorization();
 
