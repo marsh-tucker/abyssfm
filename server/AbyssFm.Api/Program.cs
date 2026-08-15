@@ -1,5 +1,7 @@
 using AbyssFm.Api.Data;
 using Microsoft.EntityFrameworkCore;
+using AbyssFm.Api.Data.Seed;
+using AbyssFm.Api.Services;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -10,8 +12,13 @@ builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddDbContext<AbyssFmDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
-    
+
+builder.Services.AddScoped<IRecommendationService, RecommendationService>();
+
+builder.Services.AddScoped<DatabaseSeeder>();
+
 builder.Services.AddOpenApi();
+
 
 var app = builder.Build();
 
@@ -19,6 +26,13 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+
+    using var scope = app.Services.CreateScope();
+
+    var seeder = scope.ServiceProvider
+        .GetRequiredService<DatabaseSeeder>();
+
+    await seeder.SeedAsync();
 }
 
 app.UseHttpsRedirection();
